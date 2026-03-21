@@ -13,11 +13,6 @@ export function createToolHandlers({ db, twitchClient, pokeClient }) {
         return { isError: true, content: [{ type: 'text', text: `User '${lower}' not found on Twitch.` }] };
       }
 
-      // Connect WebSocket if not already connected
-      if (!twitchClient.connected) {
-        await twitchClient.connectAndWait();
-      }
-
       const onlineSubId = await twitchClient.createSubscription('stream.online', userId);
       const offlineSubId = await twitchClient.createSubscription('stream.offline', userId);
       db.addUser({
@@ -38,12 +33,6 @@ export function createToolHandlers({ db, twitchClient, pokeClient }) {
       if (user.online_subscription_id) await twitchClient.deleteSubscription(user.online_subscription_id);
       if (user.offline_subscription_id) await twitchClient.deleteSubscription(user.offline_subscription_id);
       db.removeUser(lower);
-
-      // Disconnect WebSocket if no more users to watch
-      if (db.getUsers().length === 0) {
-        twitchClient.disconnect();
-      }
-
       return { content: [{ type: 'text', text: `Stopped watching '${lower}'.` }] };
     },
 

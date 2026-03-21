@@ -34,10 +34,6 @@ describe('mcp-server tool handlers', () => {
       resolveUsername: async (u) => u === 'shroud' ? '12345' : null,
       createSubscription: async () => 'sub-id',
       deleteSubscription: async () => {},
-      disconnect: () => {},
-      connected: true,
-      connectAndWait: async () => {},
-      sessionId: 'session-abc',
     };
     mockPoke = {
       createWebhook: async ({ condition, action }) => ({

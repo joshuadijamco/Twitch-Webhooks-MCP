@@ -7,10 +7,19 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
 - A [Twitch application](https://dev.twitch.tv/console/apps) (for Client ID and Client Secret)
 - A [Poke API key](https://poke.com/kitchen/api-keys)
+- A public HTTPS URL for Twitch EventSub callbacks (e.g., [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/))
 
 ## Quick Start
 
-1. **Clone and configure:**
+1. **Set up a Cloudflare tunnel** (or any reverse proxy) pointing to your server's port 3000:
+
+   ```bash
+   cloudflared tunnel --url http://localhost:3000
+   ```
+
+   Note the public URL (e.g., `https://twitch-mcp.yourdomain.com`).
+
+2. **Clone and configure:**
 
    ```bash
    cp .env.example .env
@@ -21,10 +30,13 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
    ```
    TWITCH_CLIENT_ID=your_client_id
    TWITCH_CLIENT_SECRET=your_client_secret
+   TWITCH_WEBHOOK_URL=https://twitch-mcp.yourdomain.com/twitch/eventsub
    POKE_API_KEY=pk_your_api_key
    ```
 
-2. **Run:**
+   `TWITCH_WEBHOOK_SECRET` is optional — a random one is generated if not set.
+
+3. **Run:**
 
    ```bash
    docker compose up --build
@@ -32,9 +44,9 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 
    The MCP server starts on `http://localhost:3000/mcp`.
 
-3. **Connect your MCP client** (e.g., Claude Desktop, Poke) to `http://localhost:3000/mcp`.
+4. **Connect your MCP client** (e.g., Claude Desktop, Poke) to `http://localhost:3000/mcp`.
 
-4. **Use the tools** through your AI agent:
+5. **Use the tools** through your AI agent:
 
    ```
    > Configure a webhook to notify me when a streamer goes live
@@ -54,9 +66,10 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 
 1. An AI agent calls `configure_webhook` to define what should happen when a streamer goes live
 2. The agent calls `watch_user` to start monitoring specific Twitch users
-3. The server maintains a persistent WebSocket connection to Twitch EventSub
-4. When a watched user starts streaming, the server fires a Poke webhook with the stream details
-5. Poke executes the configured action (e.g., send a notification, post a message)
+3. The server creates Twitch EventSub subscriptions (webhook transport) — Twitch will POST to your public URL when stream events occur
+4. When a watched user starts streaming, Twitch sends a `stream.online` event to `/twitch/eventsub`
+5. The server verifies the signature, fetches stream details, and fires a Poke webhook
+6. Poke executes the configured action (e.g., send a notification, post a message)
 
 ## Configuration
 
@@ -64,9 +77,11 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 |---------------------|----------|---------|-------------|
 | `TWITCH_CLIENT_ID` | Yes | — | Twitch app client ID |
 | `TWITCH_CLIENT_SECRET` | Yes | — | Twitch app client secret |
+| `TWITCH_WEBHOOK_URL` | Yes | — | Public HTTPS URL for EventSub callbacks |
 | `POKE_API_KEY` | Yes | — | Poke SDK API key |
+| `TWITCH_WEBHOOK_SECRET` | No | random | Secret for verifying Twitch signatures |
 | `MCP_TRANSPORT` | No | `http` | `http` (Streamable HTTP) or `stdio` |
-| `PORT` | No | `3000` | Server port for HTTP transport |
+| `PORT` | No | `3000` | Server port |
 
 ## Transport Modes
 
@@ -74,11 +89,19 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 
 **stdio:** Communicates over stdin/stdout. Use this when the MCP client launches the server as a subprocess. Set `MCP_TRANSPORT=stdio` in your `.env`.
 
+## Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/mcp` | POST/GET/DELETE | MCP Streamable HTTP transport |
+| `/twitch/eventsub` | POST | Twitch EventSub webhook callback |
+| `/health` | GET | Health check |
+
 ## Health Check
 
 ```bash
 curl http://localhost:3000/health
-# {"status":"ok","twitchConnected":true}
+# {"status":"ok"}
 ```
 
 ## Development
@@ -102,10 +125,10 @@ npm test
 Single Node.js process with three responsibilities:
 
 - **MCP Server** — exposes tools via Streamable HTTP or stdio
-- **Twitch EventSub WebSocket Client** — persistent connection to Twitch, auto-reconnects with exponential backoff, re-subscribes watched users on reconnect
+- **Twitch EventSub Webhook Receiver** — receives stream events from Twitch via HTTP POST, verifies HMAC-SHA256 signatures
 - **Poke Webhook Sender** — fires webhooks when stream.online events arrive
 
-Data is persisted in SQLite (stored in a Docker volume at `/app/data`).
+Data is persisted in SQLite (stored in a Docker volume at `/app/data`). Webhook subscriptions persist on Twitch's side, so they survive server restarts.
 
 ## License
 

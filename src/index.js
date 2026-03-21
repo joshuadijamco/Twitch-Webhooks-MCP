@@ -19,12 +19,16 @@ const auth = createTwitchAuth({
   clientId: process.env.TWITCH_CLIENT_ID,
   clientSecret: process.env.TWITCH_CLIENT_SECRET,
 });
-const twitchClient = createTwitchClient({ auth });
+const twitchClient = createTwitchClient({
+  auth,
+  webhookUrl: process.env.TWITCH_WEBHOOK_URL,
+  webhookSecret: process.env.TWITCH_WEBHOOK_SECRET,
+});
 const pokeClient = createPokeClient({ apiKey: process.env.POKE_API_KEY });
 const mcpDeps = { db, twitchClient, pokeClient };
 
-// Register Twitch event handlers
-twitchClient.onStreamOnline(async (event) => {
+// Handle stream.online events — fetch stream details and fire Poke webhook
+async function handleStreamOnline(event) {
   const username = event.broadcaster_user_login.toLowerCase();
   console.log(`[event] stream.online: ${username}`);
   db.setUserOnline(username);
@@ -52,27 +56,13 @@ twitchClient.onStreamOnline(async (event) => {
   } catch (err) {
     console.error(`[event] Failed to send Poke webhook for ${username}:`, err.message);
   }
-});
+}
 
-twitchClient.onStreamOffline((event) => {
+function handleStreamOffline(event) {
   const username = event.broadcaster_user_login.toLowerCase();
   console.log(`[event] stream.offline: ${username}`);
   db.setUserOffline(username);
-});
-
-twitchClient.onSessionReady(async () => {
-  const users = db.getUsers();
-  console.log(`[startup] Re-subscribing ${users.length} watched users`);
-  for (const user of users) {
-    try {
-      const onlineSubId = await twitchClient.createSubscription('stream.online', user.twitch_user_id);
-      const offlineSubId = await twitchClient.createSubscription('stream.offline', user.twitch_user_id);
-      db.updateSubscriptionIds(user.username, onlineSubId, offlineSubId);
-    } catch (err) {
-      console.error(`[startup] Failed to re-subscribe ${user.username}:`, err.message);
-    }
-  }
-});
+}
 
 // Start MCP server first (so it's available even if Twitch auth fails)
 if (mcpTransport === 'stdio') {
@@ -132,7 +122,6 @@ if (mcpTransport === 'stdio') {
       };
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
-      // Store after handleRequest so sessionId is assigned
       if (transport.sessionId) {
         sessions[transport.sessionId] = transport;
       }
@@ -142,28 +131,66 @@ if (mcpTransport === 'stdio') {
     }
   });
 
+  // Twitch EventSub webhook endpoint — receives stream events from Twitch
+  app.post('/twitch/eventsub', express.raw({ type: 'application/json' }), (req, res) => {
+    const messageId = req.headers['twitch-eventsub-message-id'];
+    const timestamp = req.headers['twitch-eventsub-message-timestamp'];
+    const signature = req.headers['twitch-eventsub-message-signature'];
+    const messageType = req.headers['twitch-eventsub-message-type'];
+    const rawBody = req.body.toString();
+
+    if (!twitchClient.verifySignature(messageId, timestamp, rawBody, signature)) {
+      console.warn('[twitch-eventsub] Invalid signature, rejecting');
+      res.status(403).send('Invalid signature');
+      return;
+    }
+
+    const body = JSON.parse(rawBody);
+
+    // Twitch sends a challenge on subscription creation — echo it back
+    if (messageType === 'webhook_callback_verification') {
+      console.log(`[twitch-eventsub] Verification challenge for ${body.subscription.type}`);
+      res.set('Content-Type', 'text/plain').status(200).send(body.challenge);
+      return;
+    }
+
+    // Revocation — Twitch removed the subscription
+    if (messageType === 'revocation') {
+      console.warn(`[twitch-eventsub] Subscription revoked: ${body.subscription.type} for ${body.subscription.condition.broadcaster_user_id}`);
+      res.status(204).end();
+      return;
+    }
+
+    // Notification — actual event
+    if (messageType === 'notification') {
+      const subType = body.subscription.type;
+      if (subType === 'stream.online') {
+        handleStreamOnline(body.event);
+      } else if (subType === 'stream.offline') {
+        handleStreamOffline(body.event);
+      }
+      res.status(204).end();
+      return;
+    }
+
+    res.status(204).end();
+  });
+
   app.get('/health', (req, res) => {
-    res.json({ status: 'ok', twitchConnected: !!twitchClient.sessionId });
+    res.json({ status: 'ok' });
   });
 
   app.listen(port, () => {
     console.log(`[startup] MCP server running on http://0.0.0.0:${port}/mcp`);
+    console.log(`[startup] Twitch EventSub webhook at http://0.0.0.0:${port}/twitch/eventsub`);
   });
 }
 
-// Connect to Twitch in the background (non-blocking)
+// Fetch Twitch auth token (non-blocking)
 try {
   console.log('[startup] Fetching Twitch auth token...');
   await auth.getToken();
   console.log('[startup] Twitch auth OK');
-
-  const existingUsers = db.getUsers();
-  if (existingUsers.length > 0) {
-    console.log(`[startup] ${existingUsers.length} watched users found, connecting to Twitch EventSub WebSocket...`);
-    twitchClient.connect();
-  } else {
-    console.log('[startup] No watched users, WebSocket will connect when first user is added');
-  }
 } catch (err) {
   console.error(`[startup] Twitch auth failed: ${err.message}`);
   console.error('[startup] MCP server is running but Twitch features will fail until auth succeeds');

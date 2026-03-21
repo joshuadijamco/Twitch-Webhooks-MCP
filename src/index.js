@@ -23,6 +23,7 @@ const twitchClient = createTwitchClient({ auth });
 const pokeClient = createPokeClient({ apiKey: process.env.POKE_API_KEY });
 const mcpDeps = { db, twitchClient, pokeClient };
 
+// Register Twitch event handlers
 twitchClient.onStreamOnline(async (event) => {
   const username = event.broadcaster_user_login.toLowerCase();
   console.log(`[event] stream.online: ${username}`);
@@ -73,18 +74,7 @@ twitchClient.onSessionReady(async () => {
   }
 });
 
-console.log('[startup] Fetching Twitch auth token...');
-await auth.getToken();
-
-// Only connect WebSocket if there are users to watch
-const existingUsers = db.getUsers();
-if (existingUsers.length > 0) {
-  console.log(`[startup] ${existingUsers.length} watched users found, connecting to Twitch EventSub WebSocket...`);
-  twitchClient.connect();
-} else {
-  console.log('[startup] No watched users, WebSocket will connect when first user is added');
-}
-
+// Start MCP server first (so it's available even if Twitch auth fails)
 if (mcpTransport === 'stdio') {
   const mcpServer = createMcpServer(mcpDeps);
   const stdioTransport = new StdioServerTransport();
@@ -95,7 +85,6 @@ if (mcpTransport === 'stdio') {
 
   const sessions = {};
 
-  // MCP endpoints — no express.json() middleware; the SDK handles body parsing
   app.all('/mcp', async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'];
@@ -137,4 +126,22 @@ if (mcpTransport === 'stdio') {
   app.listen(port, () => {
     console.log(`[startup] MCP server running on http://0.0.0.0:${port}/mcp`);
   });
+}
+
+// Connect to Twitch in the background (non-blocking)
+try {
+  console.log('[startup] Fetching Twitch auth token...');
+  await auth.getToken();
+  console.log('[startup] Twitch auth OK');
+
+  const existingUsers = db.getUsers();
+  if (existingUsers.length > 0) {
+    console.log(`[startup] ${existingUsers.length} watched users found, connecting to Twitch EventSub WebSocket...`);
+    twitchClient.connect();
+  } else {
+    console.log('[startup] No watched users, WebSocket will connect when first user is added');
+  }
+} catch (err) {
+  console.error(`[startup] Twitch auth failed: ${err.message}`);
+  console.error('[startup] MCP server is running but Twitch features will fail until auth succeeds');
 }

@@ -82,6 +82,20 @@ if (mcpTransport === 'stdio') {
   console.log('[startup] MCP server running on stdio');
 } else {
   const app = express();
+  app.use('/mcp', express.json());
+
+  // CORS headers required for MCP Inspector (browser-based)
+  app.use('/mcp', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id');
+    res.setHeader('Access-Control-Expose-Headers', 'mcp-session-id');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   const sessions = {};
 
@@ -95,24 +109,33 @@ if (mcpTransport === 'stdio') {
           res.status(400).json({ error: 'Invalid or missing session ID' });
           return;
         }
-        await transport.handleRequest(req, res);
+        await transport.handleRequest(req, res, req.body);
         if (req.method === 'DELETE') {
           delete sessions[sessionId];
         }
         return;
       }
 
-      // POST — create new session if needed
-      if (!transport) {
-        const mcpServer = createMcpServer(mcpDeps);
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-        });
-        await mcpServer.connect(transport);
-        sessions[transport.sessionId] = transport;
+      // POST — existing session
+      if (transport) {
+        await transport.handleRequest(req, res, req.body);
+        return;
       }
 
-      await transport.handleRequest(req, res);
+      // POST — new session (initialize)
+      const mcpServer = createMcpServer(mcpDeps);
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) delete sessions[transport.sessionId];
+      };
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      // Store after handleRequest so sessionId is assigned
+      if (transport.sessionId) {
+        sessions[transport.sessionId] = transport;
+      }
     } catch (err) {
       console.error('[mcp] Error handling request:', err.message);
       if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });

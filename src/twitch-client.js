@@ -8,6 +8,7 @@ export function createTwitchClient({ auth, fetchFn = fetch, wsUrl = TWITCH_EVENT
   let ws = null;
   let keepaliveTimeout = null;
   let reconnectDelay = 1000;
+  let intentionalClose = false;
   let onStreamOnline = null;
   let onStreamOffline = null;
   let onSessionReady = null;
@@ -140,8 +141,13 @@ export function createTwitchClient({ auth, fetchFn = fetch, wsUrl = TWITCH_EVENT
     ws.on('message', (data) => handleMessage(data.toString()));
 
     ws.on('close', () => {
-      console.log(`[twitch-ws] WebSocket closed, reconnecting in ${reconnectDelay}ms`);
       clearTimeout(keepaliveTimeout);
+      if (intentionalClose) {
+        console.log('[twitch-ws] WebSocket closed');
+        intentionalClose = false;
+        return;
+      }
+      console.log(`[twitch-ws] WebSocket closed, reconnecting in ${reconnectDelay}ms`);
       setTimeout(() => connectWs(), reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
     });
@@ -154,11 +160,27 @@ export function createTwitchClient({ auth, fetchFn = fetch, wsUrl = TWITCH_EVENT
   return {
     connect() { connectWs(); },
 
+    connectAndWait() {
+      return new Promise((resolve) => {
+        const prevHandler = onSessionReady;
+        onSessionReady = () => {
+          onSessionReady = prevHandler;
+          if (prevHandler) prevHandler();
+          resolve();
+        };
+        connectWs();
+      });
+    },
+
     disconnect() {
+      intentionalClose = true;
       clearTimeout(keepaliveTimeout);
       if (ws) ws.close();
       ws = null;
+      sessionId = null;
     },
+
+    get connected() { return ws !== null && sessionId !== null; },
 
     get sessionId() { return sessionId; },
 

@@ -75,8 +75,15 @@ twitchClient.onSessionReady(async () => {
 
 console.log('[startup] Fetching Twitch auth token...');
 await auth.getToken();
-console.log('[startup] Connecting to Twitch EventSub WebSocket...');
-twitchClient.connect();
+
+// Only connect WebSocket if there are users to watch
+const existingUsers = db.getUsers();
+if (existingUsers.length > 0) {
+  console.log(`[startup] ${existingUsers.length} watched users found, connecting to Twitch EventSub WebSocket...`);
+  twitchClient.connect();
+} else {
+  console.log('[startup] No watched users, WebSocket will connect when first user is added');
+}
 
 if (mcpTransport === 'stdio') {
   const stdioTransport = new StdioServerTransport();

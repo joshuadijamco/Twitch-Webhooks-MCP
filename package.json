@@ -1,0 +1,20 @@
+{
+  "name": "twitch-webhooks-mcp",
+  "version": "1.0.0",
+  "description": "MCP server that monitors Twitch streams and fires Poke webhooks",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "better-sqlite3": "^12.8.0",
+    "express": "^5.2.1",
+    "poke": "^0.4.2",
+    "ws": "^8.20.0",
+    "zod": "^4.3.6"
+  }
+}

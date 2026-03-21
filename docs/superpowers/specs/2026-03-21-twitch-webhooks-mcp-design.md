@@ -212,6 +212,7 @@ twitch-webhooks-mcp/
 ### Dockerfile
 
 - Base image: `node:22-slim`
+- Install native build deps for better-sqlite3: `python3 make g++` (or use multi-stage build)
 - Install dependencies, copy source
 - Expose port 3000
 - `CMD ["node", "src/index.js"]`

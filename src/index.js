@@ -21,7 +21,7 @@ const auth = createTwitchAuth({
 });
 const twitchClient = createTwitchClient({ auth });
 const pokeClient = createPokeClient({ apiKey: process.env.POKE_API_KEY });
-const mcpServer = createMcpServer({ db, twitchClient, pokeClient });
+const mcpDeps = { db, twitchClient, pokeClient };
 
 twitchClient.onStreamOnline(async (event) => {
   const username = event.broadcaster_user_login.toLowerCase();
@@ -86,6 +86,7 @@ if (existingUsers.length > 0) {
 }
 
 if (mcpTransport === 'stdio') {
+  const mcpServer = createMcpServer(mcpDeps);
   const stdioTransport = new StdioServerTransport();
   await mcpServer.connect(stdioTransport);
   console.log('[startup] MCP server running on stdio');
@@ -101,6 +102,7 @@ if (mcpTransport === 'stdio') {
       let transport = sessions[sessionId];
 
       if (!transport) {
+        const mcpServer = createMcpServer(mcpDeps);
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
         });

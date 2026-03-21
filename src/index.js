@@ -92,15 +92,28 @@ if (mcpTransport === 'stdio') {
   console.log('[startup] MCP server running on stdio');
 } else {
   const app = express();
-  app.use(express.json());
 
   const sessions = {};
 
-  app.post('/mcp', async (req, res) => {
+  // MCP endpoints — no express.json() middleware; the SDK handles body parsing
+  app.all('/mcp', async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'];
       let transport = sessions[sessionId];
 
+      if (req.method === 'GET' || req.method === 'DELETE') {
+        if (!transport) {
+          res.status(400).json({ error: 'Invalid or missing session ID' });
+          return;
+        }
+        await transport.handleRequest(req, res);
+        if (req.method === 'DELETE') {
+          delete sessions[sessionId];
+        }
+        return;
+      }
+
+      // POST — create new session if needed
       if (!transport) {
         const mcpServer = createMcpServer(mcpDeps);
         transport = new StreamableHTTPServerTransport({
@@ -110,31 +123,10 @@ if (mcpTransport === 'stdio') {
         sessions[transport.sessionId] = transport;
       }
 
-      await transport.handleRequest(req, res, req.body);
+      await transport.handleRequest(req, res);
     } catch (err) {
-      console.error('[mcp] Error handling POST:', err.message);
+      console.error('[mcp] Error handling request:', err.message);
       if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
-    }
-  });
-
-  app.get('/mcp', async (req, res) => {
-    const sessionId = req.headers['mcp-session-id'];
-    const transport = sessions[sessionId];
-    if (transport) {
-      await transport.handleRequest(req, res);
-    } else {
-      res.status(400).json({ error: 'Invalid or missing session ID' });
-    }
-  });
-
-  app.delete('/mcp', async (req, res) => {
-    const sessionId = req.headers['mcp-session-id'];
-    const transport = sessions[sessionId];
-    if (transport) {
-      await transport.handleRequest(req, res);
-      delete sessions[sessionId];
-    } else {
-      res.status(400).json({ error: 'Invalid or missing session ID' });
     }
   });
 

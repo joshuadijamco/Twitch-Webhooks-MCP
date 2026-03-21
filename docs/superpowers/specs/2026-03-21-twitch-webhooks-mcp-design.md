@@ -39,20 +39,50 @@ Agent (via MCP) → watch_user("shroud")
 | `MCP_TRANSPORT` | No | `sse` | `sse` or `stdio` |
 | `PORT` | No | `3000` | SSE server port |
 
+## Poke SDK Usage
+
+The `poke` npm package provides the SDK. Initialize with an API key:
+
+```js
+const { Poke } = require("poke");
+const poke = new Poke({ apiKey: process.env.POKE_API_KEY });
+```
+
+**Creating a webhook:**
+```js
+const webhook = await poke.createWebhook({
+  condition: "When a Twitch streamer goes live",
+  action: "Send me a notification with the stream details"
+});
+// Returns: { triggerId, webhookUrl, webhookToken }
+```
+
+**Firing a webhook:**
+```js
+await poke.sendWebhook({
+  webhookUrl: webhook.webhookUrl,
+  webhookToken: webhook.webhookToken,
+  data: { event: "stream.online", username: "shroud", ... }
+});
+// Returns: { success: true }
+```
+
+The webhookUrl and webhookToken are stored in SQLite and reused across restarts — they persist on Poke's side and do not need to be re-created on startup.
+
 ## MCP Tools
 
 ### `watch_user({ username })`
 
 - Resolves the Twitch username to a user ID via Twitch API
 - Stores the user in SQLite (username, user_id, status: "offline", created_at)
-- Creates a Twitch EventSub `stream.online` subscription for that user ID via the WebSocket transport
+- Creates both `stream.online` and `stream.offline` EventSub subscriptions for that user ID via the WebSocket transport
 - Returns confirmation with the user info
 - Errors if user already watched or username not found
 
 ### `unwatch_user({ username })`
 
 - Looks up the user in SQLite
-- Deletes the EventSub subscription from Twitch
+- Deletes both EventSub subscriptions (stream.online and stream.offline) from Twitch
 - Removes the user from SQLite
 - Returns confirmation
 - Errors if user not being watched
@@ -65,7 +95,7 @@ Agent (via MCP) → watch_user("shroud")
 ### `configure_webhook({ condition, action })`
 
 - Calls `poke.createWebhook({ condition, action })` and stores the returned webhookUrl and webhookToken in SQLite
-- Only one webhook config at a time — calling again replaces the previous one
+- Only one webhook config at a time — calling again replaces the previous one (old config is overwritten; Poke manages webhook lifecycle server-side)
 - Returns the configured condition/action for confirmation
 - Example: `configure_webhook({ condition: "When a Twitch streamer goes live", action: "Send me a notification with the stream details" })`
 
@@ -80,7 +110,8 @@ Database file: `data/twitch-webhooks.db` (on a Docker volume)
 | id | INTEGER PK | Auto-increment |
 | username | TEXT UNIQUE | Twitch username (lowercase) |
 | twitch_user_id | TEXT | Twitch numeric user ID |
-| subscription_id | TEXT | EventSub subscription ID (for cleanup) |
+| online_subscription_id | TEXT | EventSub stream.online subscription ID |
+| offline_subscription_id | TEXT | EventSub stream.offline subscription ID |
 | status | TEXT | "online" or "offline" |
 | last_online_at | TEXT | ISO timestamp, null if never seen |
 | created_at | TEXT | ISO timestamp |
@@ -107,20 +138,25 @@ Database file: `data/twitch-webhooks.db` (on a Docker volume)
 
 ### Subscription Management
 
-- When `watch_user` is called, create an EventSub subscription via `POST /helix/eventsub/subscriptions` using the WebSocket session ID as transport
+- When `watch_user` is called, create both `stream.online` and `stream.offline` EventSub subscriptions via `POST /helix/eventsub/subscriptions` using the WebSocket session ID as transport
 - On startup/reconnect, re-subscribe for all users in SQLite (WebSocket subscriptions don't persist across disconnects)
+- On startup, the stored webhook config in SQLite is reused as-is (Poke webhooks persist server-side)
 
 ### Event Handling
 
-- `stream.online`: update user status in SQLite to "online", set last_online_at, fire `poke.sendWebhook()` with:
-  ```json
-  {
-    "event": "stream.online",
-    "username": "shroud",
-    "stream_title": "...",
-    "game": "...",
-    "started_at": "..."
-  }
+- `stream.online`: update user status in SQLite to "online", set last_online_at. Then fetch stream details via `GET /helix/streams?user_id=...` (the stream.online event only contains broadcaster info and started_at, not title/game). Fire `poke.sendWebhook()` with the stored webhookUrl and webhookToken:
+  ```js
+  await poke.sendWebhook({
+    webhookUrl: config.webhook_url,
+    webhookToken: config.webhook_token,
+    data: {
+      event: "stream.online",
+      username: "shroud",
+      stream_title: "Playing ranked",
+      game: "Valorant",
+      started_at: "2026-03-21T18:00:00Z"
+    }
+  });
   ```
 - `stream.offline`: update user status in SQLite to "offline" (no Poke webhook)
 
@@ -167,7 +203,8 @@ twitch-webhooks-mcp/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── package.json
-└── .env.example
+├── .env.example
+└── .dockerignore
 ```
 
 ## Docker

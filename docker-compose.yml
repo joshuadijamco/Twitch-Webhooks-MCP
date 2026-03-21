@@ -1,0 +1,13 @@
+services:
+  twitch-webhooks-mcp:
+    build: .
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    env_file:
+      - .env
+    volumes:
+      - mcp-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  mcp-data:

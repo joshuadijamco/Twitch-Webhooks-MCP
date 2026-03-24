@@ -34,7 +34,13 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
    POKE_API_KEY=pk_your_api_key
    ```
 
-   `TWITCH_WEBHOOK_SECRET` is optional — a random one is generated if not set.
+   `TWITCH_WEBHOOK_SECRET` can be any random string you choose — it's a shared secret between your server and Twitch used to sign and verify webhook payloads. It doesn't need to be registered anywhere on Twitch's side. You can generate one with:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+   If left empty, a random secret is generated at startup. However, it's recommended to set one explicitly so it persists across server restarts — otherwise Twitch may fail signature verification on existing subscriptions after a restart.
 
 3. **Run:**
 
@@ -46,21 +52,38 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 
 4. **Connect your MCP client** (e.g., Claude Desktop, Poke) to `http://localhost:3000/mcp`.
 
-5. **Use the tools** through your AI agent:
-
-   ```
-   > Configure a webhook to notify me when a streamer goes live
-   > Watch user "shroud"
-   ```
+6. **Configure the webhook and start watching users** through your AI agent (see [MCP Tools](#mcp-tools) below).
 
 ## MCP Tools
 
-| Tool | Description |
-|------|-------------|
-| `watch_user({ username })` | Start monitoring a Twitch user for going online |
-| `unwatch_user({ username })` | Stop monitoring a user |
-| `list_watched_users()` | List all monitored users and their online/offline status |
-| `configure_webhook({ condition, action })` | Set up the Poke webhook (what the agent should do when someone goes live) |
+### `configure_webhook({ condition, action })`
+
+Sets up the Poke webhook that fires when a watched user goes live. Both `condition` and `action` are natural language strings that tell the Poke agent **when** to act and **what** to do.
+
+**Example:**
+
+| Parameter | Example Value |
+|-----------|---------------|
+| `condition` | `"A Twitch streamer I follow goes live"` |
+| `action` | `"Send me a notification with the streamer's name, stream title, and game"` |
+
+You should configure this **before** adding users to watch, so notifications are ready when events arrive.
+
+### `watch_user({ username })`
+
+Start monitoring a Twitch user. This creates Twitch EventSub subscriptions for `stream.online` and `stream.offline` events for the given username.
+
+**Example:** `watch_user({ username: "shroud" })`
+
+> **Note:** The `TWITCH_WEBHOOK_URL` environment variable must be set to a publicly reachable HTTPS URL, otherwise this will fail with a 400 error about a missing callback field.
+
+### `unwatch_user({ username })`
+
+Stop monitoring a user and remove their EventSub subscriptions.
+
+### `list_watched_users()`
+
+List all monitored users and their current online/offline status.
 
 ## How It Works
 
@@ -79,7 +102,7 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 | `TWITCH_CLIENT_SECRET` | Yes | — | Twitch app client secret |
 | `TWITCH_WEBHOOK_URL` | Yes | — | Public HTTPS URL for EventSub callbacks |
 | `POKE_API_KEY` | Yes | — | Poke SDK API key |
-| `TWITCH_WEBHOOK_SECRET` | No | random | Secret for verifying Twitch signatures |
+| `TWITCH_WEBHOOK_SECRET` | Recommended | random | Any random string used to sign/verify Twitch webhook payloads (see [Quick Start](#quick-start)) |
 | `MCP_TRANSPORT` | No | `http` | `http` (Streamable HTTP) or `stdio` |
 | `PORT` | No | `3000` | Server port |
 
@@ -97,12 +120,38 @@ An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) we
 | `/twitch/eventsub` | POST | Twitch EventSub webhook callback |
 | `/health` | GET | Health check |
 
-## Health Check
+## Testing
+
+### Verify the tunnel is reachable
 
 ```bash
-curl http://localhost:3000/health
+curl https://your-tunnel-hostname.example.com/health
 # {"status":"ok"}
 ```
+
+### Verify EventSub subscriptions
+
+After calling `watch_user`, you can check that Twitch accepted your subscriptions. The subscription status should be `enabled` (not `webhook_callback_verification_pending`):
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "Client-Id: YOUR_CLIENT_ID" \
+     https://api.twitch.tv/helix/eventsub/subscriptions
+```
+
+### Send a test event with the Twitch CLI
+
+The [Twitch CLI](https://dev.twitch.tv/docs/cli/) can send fake EventSub events directly to your endpoint without waiting for a real streamer to go live:
+
+```bash
+brew install twitchdev/twitch/twitch-cli
+
+twitch event trigger stream.online --forward-address https://your-tunnel-hostname.example.com/twitch/eventsub --secret YOUR_WEBHOOK_SECRET
+```
+
+You should see `[event] stream.online: testbroadcaster` in your server logs. If you've configured a Poke webhook, you'll also get a notification on your phone.
+
+> **Note:** The Twitch CLI bypasses Twitch entirely — it crafts a fake signed payload and POSTs it directly to your endpoint. This means it works regardless of which users you're watching. In production, only events for users you've subscribed to via `watch_user` will arrive.
 
 ## Development
 

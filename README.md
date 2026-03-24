@@ -2,6 +2,9 @@
 
 An MCP server that monitors Twitch streams and fires [Poke](https://poke.com) webhooks when watched users go live. AI agents interact with it via MCP tools to manage which users to watch and how notifications are configured.
 
+![IMG_8639](https://github.com/user-attachments/assets/7c1d5752-91a9-428a-9afa-f1e94dd81a07)
+
+
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose

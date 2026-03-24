@@ -6,8 +6,5 @@ services:
     env_file:
       - .env
     volumes:
-      - mcp-data:/app/data
+      - ./data:/app/data
     restart: unless-stopped
-
-volumes:
-  mcp-data:

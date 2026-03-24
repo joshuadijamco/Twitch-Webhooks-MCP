@@ -48,6 +48,25 @@ export function createTwitchClient({ auth, webhookUrl, webhookSecret, fetchFn = 
     return data.data[0].id;
   }
 
+  async function listSubscriptions() {
+    const subscriptions = [];
+    let cursor = '';
+    do {
+      const url = cursor
+        ? `${TWITCH_API}/eventsub/subscriptions?after=${cursor}`
+        : `${TWITCH_API}/eventsub/subscriptions`;
+      const res = await twitchApiCall(url);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Failed to list subscriptions: ${res.status} ${text}`);
+      }
+      const data = await res.json();
+      subscriptions.push(...data.data);
+      cursor = data.pagination?.cursor || '';
+    } while (cursor);
+    return subscriptions;
+  }
+
   async function deleteSubscription(subscriptionId) {
     const res = await twitchApiCall(
       `${TWITCH_API}/eventsub/subscriptions?id=${subscriptionId}`,
@@ -91,6 +110,7 @@ export function createTwitchClient({ auth, webhookUrl, webhookSecret, fetchFn = 
 
   return {
     createSubscription,
+    listSubscriptions,
     deleteSubscription,
     resolveUsername,
     getStreamInfo,

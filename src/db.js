@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 export function createDb(dbPath) {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
+  db.pragma('wal_checkpoint(TRUNCATE)');
   db.pragma('foreign_keys = ON');
 
   db.exec(`

@@ -47,6 +47,54 @@ export function createToolHandlers({ db, twitchClient, pokeClient }) {
       return { content: [{ type: 'text', text: lines.join('\n') }] };
     },
 
+    async resetWatchlist() {
+      const users = db.getUsers();
+      const errors = [];
+
+      // Delete subscriptions known to the DB
+      for (const user of users) {
+        try {
+          if (user.online_subscription_id) await twitchClient.deleteSubscription(user.online_subscription_id);
+        } catch (err) {
+          errors.push(`Failed to delete online subscription for ${user.username}: ${err.message}`);
+        }
+        try {
+          if (user.offline_subscription_id) await twitchClient.deleteSubscription(user.offline_subscription_id);
+        } catch (err) {
+          errors.push(`Failed to delete offline subscription for ${user.username}: ${err.message}`);
+        }
+      }
+
+      // Also fetch and delete ALL subscriptions from Twitch to handle orphans
+      let twitchDeletedCount = 0;
+      try {
+        const allSubs = await twitchClient.listSubscriptions();
+        for (const sub of allSubs) {
+          try {
+            await twitchClient.deleteSubscription(sub.id);
+            twitchDeletedCount++;
+          } catch (err) {
+            errors.push(`Failed to delete Twitch subscription ${sub.id}: ${err.message}`);
+          }
+        }
+      } catch (err) {
+        errors.push(`Failed to list Twitch subscriptions: ${err.message}`);
+      }
+
+      db.clearAll();
+
+      const parts = [];
+      if (users.length > 0) parts.push(`Removed ${users.length} user(s) from database.`);
+      if (twitchDeletedCount > 0) parts.push(`Deleted ${twitchDeletedCount} Twitch subscription(s).`);
+      if (parts.length === 0) parts.push('No users or subscriptions to remove.');
+
+      const summary = parts.join(' ');
+      if (errors.length > 0) {
+        return { content: [{ type: 'text', text: `${summary}\nWarnings:\n${errors.join('\n')}` }] };
+      }
+      return { content: [{ type: 'text', text: summary }] };
+    },
+
     async configureWebhook({ condition, action }) {
       const result = await pokeClient.createWebhook({ condition, action });
       db.saveWebhookConfig({
@@ -85,6 +133,13 @@ export function createMcpServer({ db, twitchClient, pokeClient }) {
     'List all currently monitored Twitch users and their status',
     {},
     async () => handlers.listWatchedUsers()
+  );
+
+  server.tool(
+    'reset_watchlist',
+    'Remove all watched users and delete their Twitch EventSub subscriptions',
+    {},
+    async () => handlers.resetWatchlist()
   );
 
   server.tool(

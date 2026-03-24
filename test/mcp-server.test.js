@@ -29,11 +29,13 @@ describe('mcp-server tool handlers', () => {
         };
       },
       getWebhookConfig() { return this.webhookConfig; },
+      clearAll() { this.users = []; this.webhookConfig = null; },
     };
     mockTwitch = {
       resolveUsername: async (u) => u === 'shroud' ? '12345' : null,
       createSubscription: async () => 'sub-id',
       deleteSubscription: async () => {},
+      listSubscriptions: async () => [],
     };
     mockPoke = {
       createWebhook: async ({ condition, action }) => ({
@@ -89,6 +91,31 @@ describe('mcp-server tool handlers', () => {
       await handlers.watchUser({ username: 'shroud' });
       const result = await handlers.listWatchedUsers();
       assert.ok(result.content[0].text.includes('shroud'));
+    });
+  });
+
+  describe('reset_watchlist', () => {
+    it('should clear DB users and delete Twitch subscriptions', async () => {
+      await handlers.watchUser({ username: 'shroud' });
+      const result = await handlers.resetWatchlist();
+      assert.ok(result.content[0].text.includes('Removed 1 user'));
+      assert.equal(mockDb.users.length, 0);
+    });
+
+    it('should delete orphaned Twitch subscriptions even when DB is empty', async () => {
+      const deletedIds = [];
+      mockTwitch.listSubscriptions = async () => [
+        { id: 'orphan-1' }, { id: 'orphan-2' },
+      ];
+      mockTwitch.deleteSubscription = async (id) => { deletedIds.push(id); };
+      const result = await handlers.resetWatchlist();
+      assert.ok(result.content[0].text.includes('Deleted 2 Twitch subscription'));
+      assert.deepEqual(deletedIds, ['orphan-1', 'orphan-2']);
+    });
+
+    it('should report no users or subscriptions when both empty', async () => {
+      const result = await handlers.resetWatchlist();
+      assert.ok(result.content[0].text.includes('No users or subscriptions'));
     });
   });
 
